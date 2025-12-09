@@ -25,6 +25,7 @@ from src.feature_engineering import FeatureEngineer
 from src.ensemble_model import HybridEnsemble
 from src.confidence_module import DepthAdaptiveConfidence
 from src.evaluation import Evaluator
+from src.image_validator import SeismicImageValidator, validate_seismic_image
 
 # Groq API Configuration
 # Set your Groq API key as an environment variable: export GROQ_API_KEY="your-api-key"
@@ -555,6 +556,7 @@ def load_components():
         "engineer": FeatureEngineer(),
         "confidence": DepthAdaptiveConfidence(),
         "evaluator": Evaluator(),
+        "validator": SeismicImageValidator(strict_mode=True),
     }
 
 
@@ -1057,18 +1059,84 @@ def main():
             pil_image = pil_image.resize((101, 101), Image.Resampling.LANCZOS)
             image = np.array(pil_image, dtype=np.float32) / 255.0
 
-            st.markdown('<div class="info-panel">', unsafe_allow_html=True)
-            st.markdown("**Image loaded successfully**")
-            st.markdown("AI will automatically predict optimal drilling depth")
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Validate that this is a seismic image
+            validator = components["validator"]
+            is_valid, validation_metrics, validation_reason = validator.validate(image)
+            confidence = validation_metrics.get("validation_confidence", 0)
 
-            # Display input
-            fig_in, ax_in = plt.subplots(figsize=(5, 5))
-            ax_in.imshow(image, cmap='seismic')
-            ax_in.set_title('Seismic Survey Input', fontweight='bold')
-            ax_in.axis('off')
-            st.pyplot(fig_in)
-            plt.close()
+            if not is_valid:
+                # Completely rejected - likely blank or severely malformed
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #4a1a1a 0%, #2d0a0a 100%);
+                            padding: 1.5rem; border-radius: 12px; margin: 1rem 0;
+                            border: 2px solid #ff4444; color: #ffcccc;">
+                    <p style="font-weight: 700; margin-bottom: 0.5rem; color: #ff6666; font-size: 1.1rem;">
+                        Invalid Image
+                    </p>
+                    <p style="font-size: 0.95rem; color: #ffcccc; margin-bottom: 1rem;">
+                        {validation_reason}
+                    </p>
+                    <p style="font-size: 0.85rem; color: #ffaaaa;">
+                        This system is designed specifically for seismic survey images from salt exploration.
+                        Please upload a valid seismic image (grayscale, showing subsurface reflectors).
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Show the rejected image for reference
+                fig_rejected, ax_rejected = plt.subplots(figsize=(4, 4))
+                ax_rejected.imshow(image, cmap='gray')
+                ax_rejected.set_title('Uploaded Image (Rejected)', fontweight='bold', color='red')
+                ax_rejected.axis('off')
+                st.pyplot(fig_rejected)
+                plt.close()
+
+                image = None  # Prevent further processing
+
+            elif confidence < 0.5:
+                # Low confidence - warn user but allow processing
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #4a3a1a 0%, #2d2a0a 100%);
+                            padding: 1.5rem; border-radius: 12px; margin: 1rem 0;
+                            border: 2px solid #ffaa44; color: #ffeecc;">
+                    <p style="font-weight: 700; margin-bottom: 0.5rem; color: #ffcc66; font-size: 1.1rem;">
+                        Warning: Low Seismic Confidence ({confidence:.0%})
+                    </p>
+                    <p style="font-size: 0.95rem; color: #ffeecc; margin-bottom: 0.5rem;">
+                        This image may not be a seismic survey image. Results may not be accurate.
+                    </p>
+                    <p style="font-size: 0.85rem; color: #ffddaa;">
+                        This tool is designed for TGS Salt Identification seismic images.
+                        For best results, use grayscale seismic survey images showing subsurface geological layers.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Display input with warning
+                fig_in, ax_in = plt.subplots(figsize=(5, 5))
+                ax_in.imshow(image, cmap='seismic')
+                ax_in.set_title(f'Input Image (Low Confidence: {confidence:.0%})', fontweight='bold')
+                ax_in.axis('off')
+                st.pyplot(fig_in)
+                plt.close()
+
+            else:
+                # Good confidence - valid seismic image
+                conf_label = "High" if confidence >= 0.7 else "Medium"
+                st.markdown(f"""
+                <div class="info-panel">
+                    <p><strong>{conf_label} confidence seismic image</strong> ({confidence:.0%})</p>
+                    <p>AI will automatically predict optimal drilling depth</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Display input
+                fig_in, ax_in = plt.subplots(figsize=(5, 5))
+                ax_in.imshow(image, cmap='seismic')
+                ax_in.set_title('Seismic Survey Input', fontweight='bold')
+                ax_in.axis('off')
+                st.pyplot(fig_in)
+                plt.close()
 
             if uploaded_gt:
                 pil_gt = Image.open(uploaded_gt)

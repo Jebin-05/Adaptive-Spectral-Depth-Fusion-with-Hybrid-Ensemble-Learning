@@ -20,6 +20,7 @@ from src.feature_engineering import FeatureEngineer
 from src.ensemble_model import HybridEnsemble
 from src.confidence_module import DepthAdaptiveConfidence
 from src.visualization import Visualizer
+from src.image_validator import SeismicImageValidator, validate_seismic_image
 
 
 def parse_args():
@@ -70,14 +71,16 @@ class SaltSegmentationPipeline:
     Combines spectral decomposition, feature engineering, and ensemble prediction.
     """
 
-    def __init__(self, model_path: str = None):
+    def __init__(self, model_path: str = None, validate_images: bool = True):
         """
         Initialize the pipeline.
 
         Args:
             model_path: Path to trained model. If None, loads latest.
+            validate_images: Whether to validate images before processing.
         """
         self.model_path = model_path or os.path.join(MODELS_DIR, "ensemble_latest.joblib")
+        self.validate_images = validate_images
 
         # Initialize components
         self.loader = DataLoader()
@@ -85,6 +88,7 @@ class SaltSegmentationPipeline:
         self.engineer = FeatureEngineer()
         self.ensemble = HybridEnsemble()
         self.confidence = DepthAdaptiveConfidence()
+        self.validator = SeismicImageValidator(strict_mode=True)
 
         # Load model
         if os.path.exists(self.model_path):
@@ -106,8 +110,22 @@ class SaltSegmentationPipeline:
 
         Returns:
             Dictionary with mask, probabilities, confidence, and bounds
+            If validation fails, returns dict with 'valid': False and 'error' message
         """
         start = time.time()
+
+        # Validate image if enabled
+        if self.validate_images:
+            is_valid, metrics, reason = self.validator.validate(image)
+            if not is_valid:
+                return {
+                    "valid": False,
+                    "error": reason,
+                    "validation_metrics": metrics,
+                    "mask": None,
+                    "probabilities": None,
+                    "confidence": None,
+                }
 
         # Spectral decomposition
         spectral_features = self.decomposer.compute_multi_scale_features(image)
@@ -131,6 +149,7 @@ class SaltSegmentationPipeline:
         inference_time = time.time() - start
 
         return {
+            "valid": True,
             "mask": mask,
             "probabilities": proba_map,
             "confidence": conf_map,
